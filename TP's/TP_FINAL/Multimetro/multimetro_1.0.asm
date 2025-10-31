@@ -16,6 +16,8 @@ NUM2            EQU     0x23     ; centenas
 ADC8            EQU     0x24     ; valor 0..255 leído (ADRESH)
 TMP             EQU     0x25     ; trabajo para conversión
 C1              EQU     0x26     ; contador genérico
+PROD_L          EQU     0x27     ; producto 16-bit low
+PROD_H          EQU     0x28     ; producto 16-bit high
 
 ; Habilitación por bajo en RB7, RB6, RB5
 ALL_OFF_B       EQU     0xF0     ; RB7=1, RB6=1, RB5=1 (todos apagados)
@@ -172,6 +174,19 @@ ISR_TMR0:
     BANKSEL PORTD
     MOVWF   PORTD
 
+    ; RD7 = dp: encender solo para primer display (INDEX == 0), apagar en los demás
+    BANKSEL INDEX
+    MOVF    INDEX, W
+    BTFSC   STATUS, Z
+    GOTO    .SET_DP
+    BANKSEL PORTD
+    BCF     PORTD, 7
+    GOTO    .DP_DONE
+.SET_DP
+    BANKSEL PORTD
+    BSF     PORTD, 7
+.DP_DONE
+
     ; Habilitar dígito correspondiente (RB7/RB6/RB5 -> activo en 0)
     BANKSEL INDEX
     MOVF    INDEX, W
@@ -215,40 +230,86 @@ ACQ_DLY_L:
     GOTO    ACQ_DLY_L
     RETURN
 
-; Convierte ADC8 (0..255) a tres dígitos decimales (NUM2=cent, NUM1=dec, NUM0=uni)
+; Convierte ADC8 (0..255) a tres dígitos para mostrar V*100 (0..500)
+; Resultado: NUM2 = volts (0..5), NUM1 = décimas, NUM0 = centésimas
 BIN8_TO_DEC3:
-    ; TMP = ADC8
+    ; TMP = ADC8 (remainder work)
     MOVF    ADC8, W
     MOVWF   TMP
-    CLRF    NUM2
-    CLRF    NUM1
-    CLRF    NUM0
-
-; centenas
-B2D_HUND_LOOP:
-    MOVLW   .100
-    SUBWF   TMP, F          ; TMP = TMP - 100
-    BTFSS   STATUS, C       ; ¿borrow? (TMP < 0)?
-    GOTO    B2D_HUND_FIX
+    CLRF    NUM2        ; NUM2 = parte entera (volts)
+    ; DIVIDE ADC8 by 51 -> NUM2 = ADC8 / 51, TMP = ADC8 % 51
+B2V_DIV51_LOOP:
+    MOVLW   .51
+    SUBWF   TMP, F          ; TMP = TMP - 51
+    BTFSS   STATUS, C       ; si borrow (TMP < 51) terminar
+    GOTO    B2V_DIV51_FIX
     INCF    NUM2, F
-    GOTO    B2D_HUND_LOOP
-B2D_HUND_FIX:
+    GOTO    B2V_DIV51_LOOP
+B2V_DIV51_FIX:
+    MOVLW   .51
+    ADDWF   TMP, F          ; deshacer última resta (TMP vuelve a resto <51)
+
+    ; Ahora TMP = resto (0..50), NUM2 = volts (0..5)
+    ; Calcular frac100 = (TMP * 100) / 51
+    ; Primero PROD = TMP * 100  (16-bit)
+    CLRF    PROD_H
+    CLRF    PROD_L
     MOVLW   .100
-    ADDWF   TMP, F          ; deshacer último
-; decenas
-B2D_TENS_LOOP:
+    MOVWF   C1              ; contador = 100
+B2V_MUL_LOOP:
+    MOVF    TMP, W
+    ADDWF   PROD_L, F       ; PROD_L += TMP
+    BTFSC   STATUS, C
+    INCF    PROD_H, F       ; llevar si hay carry
+    DECFSZ  C1, F
+    GOTO    B2V_MUL_LOOP
+
+    ; Dividir PROD (16-bit) entre 51 -> resultado en NUM1 (0..99) = frac100
+    CLRF    NUM1            ; frac100 = 0
+B2V_DIV51_16_LOOP:
+    ; Si PROD_H > 0 entonces PROD >= 256 > 51 -> se puede restar
+    MOVF    PROD_H, W
+    BTFSS   STATUS, Z
+    GOTO    B2V_SUB_51
+    ; PROD_H == 0 -> comprobar PROD_L >= 51
+    MOVLW   .51
+    SUBWF   PROD_L, W
+    BTFSC   STATUS, C
+    GOTO    B2V_SUB_51
+    GOTO    B2V_DIV51_DONE
+
+B2V_SUB_51:
+    ; Restar 51 a PROD (16-bit)
+    MOVLW   .51
+    SUBWF   PROD_L, F       ; PROD_L = PROD_L - 51
+    BTFSC   STATUS, C
+    GOTO    B2V_SUB_NO_BORROW
+    ; borrow desde high
+    DECF    PROD_H, F
+B2V_SUB_NO_BORROW:
+    INCF    NUM1, F         ; incrementar cociente
+    GOTO    B2V_DIV51_16_LOOP
+
+B2V_DIV51_DONE:
+    ; Ahora NUM1 = frac100 (0..99)
+    ; Separar NUM1 en decenas y unidades: NUM1 -> tens, TMP -> units
+    MOVF    NUM1, W
+    MOVWF   TMP             ; TMP = frac100
+    CLRF    NUM1            ; tens = 0
+
+B2V_DIV10_LOOP:
     MOVLW   .10
     SUBWF   TMP, F
     BTFSS   STATUS, C
-    GOTO    B2D_TENS_FIX
-    INCF    NUM1, F
-    GOTO    B2D_TENS_LOOP
-B2D_TENS_FIX:
+    GOTO    B2V_DIV10_FIX
+    INCF    NUM1, F         ; contador tens
+    GOTO    B2V_DIV10_LOOP
+B2V_DIV10_FIX:
     MOVLW   .10
-    ADDWF   TMP, F
-; unidades
+    ADDWF   TMP, F          ; deshacer última resta
+    ; TMP ahora = unidades (0..9)
     MOVF    TMP, W
-    MOVWF   NUM0
+    MOVWF   NUM0            ; NUM0 = unidades
     RETURN
 
 ; Enviar byte en ADC8 por UART (polling TXIF)

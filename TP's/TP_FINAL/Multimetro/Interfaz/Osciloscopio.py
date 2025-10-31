@@ -254,5 +254,5 @@ if __name__ == '__main__':
     main()
 #-----------------------------------------------------------------------------------------------    
 # para ejecutar el script usar:
-# python "C:\Users\cjcar\Documents\Digital 2\TP's\TP_FINAL\Multimetro\scope_serial_receiver.py"
+# python "C:\Users\cjcar\Documents\Digital_2\TP's\TP_FINAL\Multimetro\Interfaz\Osciloscopio.py"
 #-----------------------------------------------------------------------------------------------

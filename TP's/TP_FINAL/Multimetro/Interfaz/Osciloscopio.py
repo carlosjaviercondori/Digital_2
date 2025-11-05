@@ -33,6 +33,9 @@ SIM_FREQ = 5.0
 SIM_AMP = 1.0
 _sim_t = 0.0
 
+# referencia de tensión del ADC (ajustar según hardware: 5.0, 3.3, etc.)
+VREF = 5.0
+
 def bin8_to_dec3(val):
     tmp = int(val) & 0xFF
     num2 = 0
@@ -214,16 +217,87 @@ def main():
         # indicadores y texto
         font = pygame.font.SysFont('Consolas', 18)
 
+        # --- CÁLCULO DE Vmax, Vmin, Vpp y FRECUENCIA ESTIMADA ---
+        vals = list(buffer)
+        if vals:
+            # convertir ADC(0..255) a voltaje
+            v_vals = [ (b / 255.0) * VREF for b in vals ]
+            v_max = max(v_vals)
+            v_min = min(v_vals)
+            v_pp = v_max - v_min
+
+            # estimación de frecuencia por cruces ascendentes del nivel medio
+            mid = (v_max + v_min) / 2.0
+            crossings = []
+            for i in range(1, len(v_vals)):
+                if v_vals[i-1] < mid and v_vals[i] >= mid:
+                    crossings.append(i)
+            if len(crossings) >= 2 and sample_rate > 0:
+                diffs = [crossings[i] - crossings[i-1] for i in range(1, len(crossings))]
+                avg_period_samples = sum(diffs) / len(diffs)
+                freq_est = sample_rate / avg_period_samples
+            else:
+                freq_est = 0.0
+        else:
+            v_max = v_min = v_pp = 0.0
+            freq_est = 0.0
+        # --- FIN CÁLCULOS ---
+
         # Mover ADRESH y NUMs debajo de los botones para que sean visibles
         info_x = start_x
         info_y = y_btn + btn_h + 8
 
-        screen.blit(font.render(f"ADRESH: {current_adresh:03d}", True, (200,255,200)), (info_x, info_y))
-        # Mostrar en el orden correcto: NUM0=unidades, NUM1=decenas, NUM2=centenas
-        screen.blit(font.render(f"NUM2: {num2}, NUM1: {num1}, NUM0: {num0}", True, (200,200,255)), (info_x + 200, info_y))
+        # Recuadro izquierdo para ADRESH y NUMs
+        left_box_w = 360
+        left_box_h = 32
+        left_box = pygame.Rect(info_x, info_y, left_box_w, left_box_h)
+        pygame.draw.rect(screen, (28,28,36), left_box, border_radius=6)               # fondo
+        pygame.draw.rect(screen, (70,70,90), left_box, 2, border_radius=6)           # borde
+
+        txt_color = (200,255,200)
+        small_color = (200,200,255)
+        pad = 8
+        # ADRESH a la izquierda
+        screen.blit(font.render(f"ADRESH: {current_adresh:03d}", True, txt_color), (left_box.left + pad, left_box.top + 4))
+
+        # Tres recuadros pequeños a la derecha para NUM2, NUM1 y NUM0 (asegura que NUM0 esté en recuadro)
+        digit_w = 48
+        digit_h = left_box_h - 8
+        digit_gap = 6
+        # calcular posición X para alinear los tres dígitos al borde derecho del left_box
+        digits_x = left_box.right - (digit_w*3 + digit_gap*2) - pad
+        digits_y = left_box.top + 4
+
+        for i, val in enumerate((num2, num1, num0)):
+            r = pygame.Rect(digits_x + i*(digit_w + digit_gap), digits_y, digit_w, digit_h)
+            pygame.draw.rect(screen, (20,20,30), r, border_radius=4)
+            pygame.draw.rect(screen, (70,70,90), r, 2, border_radius=4)
+            txt = font.render(str(val), True, small_color)
+            tx = r.left + (r.width - txt.get_width())//2
+            ty = r.top + (r.height - txt.get_height())//2
+            screen.blit(txt, (tx, ty))
 
         tb_label = f"Timebase: {TIMEBASE_LABELS[timebase_idx]}  (mul x{TIMEBASE_OPTIONS[timebase_idx]})"
         screen.blit(font.render(tb_label, True, (220,220,180)), (PLOT_RECT.left, PLOT_RECT.bottom + 6))
+
+        # Recuadros para Vmax, Vpp y Frecuencia (apilados, derecha)
+        info2_x = PLOT_RECT.right - 300
+        info2_y = PLOT_RECT.bottom + 8
+        metric_w = 160
+        metric_h = 28
+        spacing = 6
+
+        metrics = [
+            (f"Vmax: {v_max:.3f} V", txt_color),
+            (f"Vpp:  {v_pp:.3f} V", txt_color),
+            (f"Frec: {freq_est:.2f} Hz", txt_color)
+        ]
+
+        for i, (label, color) in enumerate(metrics):
+            r = pygame.Rect(info2_x, info2_y + i*(metric_h + spacing), metric_w, metric_h)
+            pygame.draw.rect(screen, (28,28,36), r, border_radius=6)
+            pygame.draw.rect(screen, (70,70,90), r, 2, border_radius=6)
+            screen.blit(font.render(label, True, color), (r.left + 8, r.top + 4))
 
         # dibujar botones de timebase
         for i,(r,lbl) in enumerate(btns):

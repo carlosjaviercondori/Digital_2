@@ -23,15 +23,17 @@ NUM0            EQU     0x21    ; unidades
 NUM1            EQU     0x22    ; decenas
 NUM2            EQU     0x23    ; centenas
 
-ADC8            EQU     0x24    ; N = ADRESH (0..255)
+ADC8            EQU     0x24
 TMP             EQU     0x25
 C1              EQU     0x26
-DIGIT           EQU     0x27    ; dígito actual 0..9
+DIGIT           EQU     0x27
+
+AVG_ACC         EQU     0x2C    ; acumulador para promedio
 
 CV_H            EQU     0x28    ; CV = 0..500 (16-bit)
 CV_L            EQU     0x29
 TEN_H           EQU     0x2A    ; 10*N (16-bit)
-TEN_L           EQU     0x2B
+TEN_L            EQU     0x2B
 
 ;------------------------------ Constantes ----------------------------
 ALL_OFF_B       EQU     0xE0    ; RB7=1, RB6=1, RB5=1 (apagados)
@@ -106,10 +108,10 @@ INICIO:
 
     ; ---------- Timer0 (multiplex) ----------
     BANKSEL OPTION_REG
-    MOVLW   b'00000111'         ; PS=1:256, asignado a TMR0
+    MOVLW   b'00000101'         ; PS=1:64
     MOVWF   OPTION_REG
     BANKSEL TMR0
-    MOVLW   D'237'              ; ~4.864 ms @4 MHz
+    MOVLW   D'206'              ; ~1.5 ms
     MOVWF   TMR0
 
     ; ---------- ADC ----------
@@ -146,11 +148,20 @@ WAIT_ADC:
     BTFSC   ADCON0, GO_DONE
     GOTO    WAIT_ADC
 
-    ; 3) Leer ADRESH (8 bits 0..255)
+    ; 3) Leer ADRESH
     BANKSEL ADRESH
     MOVF    ADRESH, W
     BANKSEL ADC8
-    MOVWF   ADC8               ; N = ADRESH
+    MOVWF   ADC8
+
+    ; acumulador = acumulador + nueva muestra - muestra vieja
+    BANKSEL AVG_ACC
+    ADDWF   AVG_ACC, F
+    SWAPF   AVG_ACC, W         ; vieja muestra en W (mantén 4 muestras con simple filtro)
+    MOVWF   TMP
+    RRF     AVG_ACC, F         ; AVG_ACC = AVG_ACC / 2
+    RRF     AVG_ACC, F         ; AVG_ACC = AVG_ACC / 4  (promedio aproximado)
+    MOVF    AVG_ACC, W
 
     ; 4) Escalar N(0..255) -> CV(0..500) con:
     ;    CV = (N<<1) - ((10*N + 128)>>8)    [? N*500/255 con redondeo]
@@ -244,16 +255,14 @@ TENS_FIX:
 
 ;===================== Interrupción Timer0 (multiplex) =====================
 ISR_TMR0:
-    ; Guardar contexto
     MOVWF   W_TEMP
     SWAPF   STATUS, W
     MOVWF   STATUS_TEMP
     MOVF    PCLATH, W
     MOVWF   PCLATH_TEMP
-
-    ; Recargar TMR0 y limpiar flag
+    ; Recargar TMR0
     BANKSEL TMR0
-    MOVLW   D'237'
+    MOVLW   D'206'
     MOVWF   TMR0
     BCF     INTCON, TMR0IF
 
@@ -284,6 +293,7 @@ CON_DP:
 SIN_DP:
     MOVF    DIGIT, W
     CALL    TABLA_DISPLAY
+    GOTO    WRITE_SEG
 
 WRITE_SEG:
     BANKSEL PORTD
@@ -316,9 +326,9 @@ WRITE_SEG:
 ; --- Devuelve en W la máscara de PORTB según INDEX (0..2) ---
 DIG_MASK_TABLE:
     ADDWF   PCL, F
-    RETLW   MASK_RB5_ON     ; 0 -> RB7 bajo (unidades)
-    RETLW   MASK_RB6_ON     ; 1 -> RB6 bajo (decenas)
-    RETLW   MASK_RB7_ON     ; 2 -> RB5 bajo (centenas + DP)
+    RETLW   MASK_RB5_ON    
+    RETLW   MASK_RB6_ON     
+    RETLW   MASK_RB7_ON     
 
 ;====================== Subrutinas de apoyo ==========================
 ; ~10 us @ 4 MHz (aprox)
@@ -332,4 +342,3 @@ ADLY_L:
     RETURN
 
             END
-  

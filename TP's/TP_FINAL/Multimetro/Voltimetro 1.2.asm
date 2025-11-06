@@ -28,7 +28,8 @@ TMP             EQU     0x25
 C1              EQU     0x26
 DIGIT           EQU     0x27
 
-AVG_ACC         EQU     0x2C    ; acumulador para promedio
+SUM_H          EQU     0x2C    ; suma de 8 muestras (MSB)
+SUM_L          EQU     0x2D    ; suma de 8 muestras (LSB)
 
 CV_H            EQU     0x28    ; CV = 0..500 (16-bit)
 CV_L            EQU     0x29
@@ -96,15 +97,33 @@ INICIO:
 
     ; ---------- TRIS ----------
     BANKSEL TRISD
-    CLRF    TRISD               ; PORTD salidas (segmentos)
+    CLRF    TRISD
 
     BANKSEL TRISB
-    MOVLW   b'00011111'         ; RB5..RB7 salidas; RB0..RB4 entradas
+    MOVLW   b'00011111'
     MOVWF   TRISB
 
+    BANKSEL TRISC
+    BCF     TRISC,6            ; RC6 = TX (salida)
+    BSF     TRISC,7            ; RC7 = RX (entrada)
+
     BANKSEL TRISA
-    MOVLW   b'11111111'         ; RA0 entrada (AN0)
+    MOVLW   b'11111111'
     MOVWF   TRISA
+
+    ; ---------- UART TX (19200 bps, Fosc=4 MHz) ----------
+    BANKSEL SPBRG
+    CLRF    SPBRGH
+    MOVLW   .12
+    MOVWF   SPBRG
+
+    BANKSEL TXSTA
+    MOVLW   b'00100100'        ; BRGH=1, TXEN=1, modo async
+    MOVWF   TXSTA
+
+    BANKSEL RCSTA
+    MOVLW   b'10000000'        ; SPEN=1
+    MOVWF   RCSTA
 
     ; ---------- Timer0 (multiplex) ----------
     BANKSEL OPTION_REG
@@ -136,32 +155,50 @@ INICIO:
 
 ;========================= Bucle principal ============================
 MAIN_LOOP:
-    ; 1) Pequeño tiempo de adquisición
-    CALL    ACQ_DELAY_10US
+    ; Promediar 8 conversiones para suavizar la lectura
+    BANKSEL SUM_L
+    CLRF    SUM_L
+    CLRF    SUM_H
+    MOVLW   .8
+    MOVWF   TMP
 
-    ; 2) Disparar conversión
+SAMPLE_ADC:
+    CALL    ACQ_DELAY_10US
     BANKSEL ADCON0
     BSF     ADCON0, GO_DONE
 
 WAIT_ADC:
-    BANKSEL ADCON0
     BTFSC   ADCON0, GO_DONE
     GOTO    WAIT_ADC
 
-    ; 3) Leer ADRESH
     BANKSEL ADRESH
     MOVF    ADRESH, W
+    BANKSEL SUM_L
+    ADDWF   SUM_L, F
+    BTFSC   STATUS, C
+    INCF    SUM_H, F
+
+    DECFSZ  TMP, F
+    GOTO    SAMPLE_ADC
+
+    ; promedio = suma / 8
+    BCF     STATUS, C
+    RRF     SUM_H, F
+    RRF     SUM_L, F
+    BCF     STATUS, C
+    RRF     SUM_H, F
+    RRF     SUM_L, F
+    BCF     STATUS, C
+    RRF     SUM_H, F
+    RRF     SUM_L, F
+
+    MOVF    SUM_L, W
     BANKSEL ADC8
     MOVWF   ADC8
 
-    ; acumulador = acumulador + nueva muestra - muestra vieja
-    BANKSEL AVG_ACC
-    ADDWF   AVG_ACC, F
-    SWAPF   AVG_ACC, W         ; vieja muestra en W (mantén 4 muestras con simple filtro)
-    MOVWF   TMP
-    RRF     AVG_ACC, F         ; AVG_ACC = AVG_ACC / 2
-    RRF     AVG_ACC, F         ; AVG_ACC = AVG_ACC / 4  (promedio aproximado)
-    MOVF    AVG_ACC, W
+    ; enviar la muestra promedio por UART
+    MOVF    ADC8, W
+    CALL    UART_SEND
 
     ; 4) Escalar N(0..255) -> CV(0..500) con:
     ;    CV = (N<<1) - ((10*N + 128)>>8)    [? N*500/255 con redondeo]
@@ -326,9 +363,9 @@ WRITE_SEG:
 ; --- Devuelve en W la máscara de PORTB según INDEX (0..2) ---
 DIG_MASK_TABLE:
     ADDWF   PCL, F
-    RETLW   MASK_RB5_ON    
-    RETLW   MASK_RB6_ON     
-    RETLW   MASK_RB7_ON     
+    RETLW   MASK_RB5_ON     ; centenas
+    RETLW   MASK_RB6_ON     ; decenas
+    RETLW   MASK_RB7_ON     ; unidades
 
 ;====================== Subrutinas de apoyo ==========================
 ; ~10 us @ 4 MHz (aprox)
@@ -339,6 +376,15 @@ ADLY_L:
     NOP
     DECFSZ  C1, F
     GOTO    ADLY_L
+    RETURN
+
+UART_SEND:
+    BANKSEL PIR1
+WAIT_TX:
+    BTFSS   PIR1, TXIF
+    GOTO    WAIT_TX
+    BANKSEL TXREG
+    MOVWF   TXREG
     RETURN
 
             END

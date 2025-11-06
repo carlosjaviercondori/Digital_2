@@ -1,4 +1,4 @@
-# Multímetro PIC16F887 — multimetro_1.0.asm 🔋🔍
+# Voltímetro PIC16F887 — Voltimetro_1.0.asm 🔋🔍
 
 Descripción 💡  
 - Programa en ensamblador para PIC16F887 que mide una tensión en AN0 (RA0) y la muestra en un display 3×7 segmentos multiplexado.  
@@ -49,9 +49,4 @@ Compilación y programación 📦
 - Programador: PICkit3/4, ICD, etc.  
 - Archivo fuente: TP's\TP_FINAL\Multimetro\multimetro_1.0.asm
 
-Consejos y mejoras 🔧  
-- Para mayor precisión usar la lectura 10‑bit (ADRESH:ADRESL) y recalcular escala.  
-- Si los segmentos consumen mucha corriente, usar drivers por segmento o limitar el duty‑cycle.  
-- Añadir filtro RC en AN0 para señales ruidosas. 🧰
 
-¿Quieres un diagrama esquemático PNG/SVG con los pines numerados y transistores? 🖼️ Puedo generarlo y guardarlo en la misma carpeta.

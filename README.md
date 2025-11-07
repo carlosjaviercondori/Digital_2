@@ -30,7 +30,7 @@ Ejemplo de lectura 📈
 - Conversión interna → NUM2 = 2, NUM1 = 5, NUM0 = 4  
 - Visual: 2 . 5 4 (RD7 encendido en primer dígito) 🔢
 
-![imagine alt](https://github.com/carlosjaviercondori/Digital_2/blob/main/TP's/TP_FINAL/Multimetro/Interfaz/version%201.1.png)
+![imagine alt](https://github.com/carlosjaviercondori/Digital_2/blob/main/TP's/TP_FINAL/Multimetro/Interfaz/version%201.3.png)
 
 Variables importantes (direcciones) 📎  
 - INDEX (0x20) — índice de dígito activo (0..2)  
@@ -46,9 +46,11 @@ Montaje rápido 🛠️
 4. Alimentar PIC a +5V y GND; añadir condensador 0.1 µF entre Vdd y Vss cerca del PIC.  
 5. Programar el PIC con multimetro_1.0.asm (usar MPASM / MPLAB X y programador compatible). 💾
 
+![imagine alt](topologico)
+
 Compilación y programación 📦  
 - Usar MPLAB X / MPASM para ensamblar.  
-- Programador: PICkit3/4, ICD, etc.  
+- Usar Visual Studio Code para un mejor manejo del proyecto
 - Archivo fuente: TP's\TP_FINAL\Multimetro\multimetro_1.0.asm
 
 

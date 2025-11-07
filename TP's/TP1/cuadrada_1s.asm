@@ -8,7 +8,7 @@ contador3 EQU 0x22
 
 
 
-ORG 0x0000 
+ORG 0x00
 MOVLW   HIGH(MainApplication)	;esto me lo pidio el flasher pora no romper el bootloader
 MOVWF   PCLATH
 GOTO    MainApplication	

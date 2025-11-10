@@ -51,6 +51,9 @@ Montaje rápido 🛠️
 Compilación y programación 📦  
 - Usar MPLAB X / MPASM para ensamblar.  
 - Usar Visual Studio Code para un mejor manejo del proyecto
+
+https://github.com/user-attachments/assets/b8795e52-7faa-4ec7-8473-5be6cf4055f7
+
 - Archivo fuente: TP's\TP_FINAL\Multimetro\multimetro_1.0.asm
 
 

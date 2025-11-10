@@ -28,6 +28,14 @@ TIMEBASE_OPTIONS = [1, 2, 5, 10]   # multiplicadores de velocidad
 TIMEBASE_LABELS = ["1x", "2x", "5x", "10x"]
 timebase_idx = 0
 
+# Formas de onda (botón cicla entre estas)
+WAVEFORMS = ["sine", "triangle", "square"]
+waveform_idx = 0
+
+# Opciones de amplitud (botón cicla entre estas; valores multiplicadores)
+AMPLITUDE_OPTIONS = [0.2, 0.5, 1.0, 1.5, 2.0]
+amplitude_idx = 2  # por defecto 1.0
+
 # Simulación si no hay serial
 SIM_FREQ = 5.0
 SIM_AMP = 1.0
@@ -103,11 +111,25 @@ def draw_button(surface, rect, label, active=False):
     ty = rect.top + (rect.height - text.get_height())//2
     surface.blit(text, (tx, ty))
 
-def generate_sim_sample(t, freq=SIM_FREQ, amp=SIM_AMP):
-    return amp * math.sin(2 * math.pi * freq * t)
+def generate_sim_sample(t, freq=SIM_FREQ, amp=SIM_AMP, waveform="sine"):
+    """Genera una muestra normalizada en [-1,1] según la forma elegida."""
+    phase = (t * freq) % 1.0
+    if waveform == "sine":
+        return amp * math.sin(2 * math.pi * freq * t)
+    elif waveform == "triangle":
+        # triángulo que va de -1 a 1
+        if phase < 0.5:
+            return amp * (4.0 * phase - 1.0)
+        else:
+            return amp * (-4.0 * phase + 3.0)
+    elif waveform == "square":
+        # cuadrada: +1 o -1
+        return amp * (1.0 if math.sin(2 * math.pi * freq * t) >= 0 else -1.0)
+    else:
+        return amp * math.sin(2 * math.pi * freq * t)
 
 def main():
-    global _sim_t, timebase_idx
+    global _sim_t, timebase_idx, waveform_idx, amplitude_idx
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Osciloscopio - Lectura ADRESH por Serial")
@@ -145,6 +167,27 @@ def main():
     stop_w = 90
     stop_rect = pygame.Rect(start_x + len(TIMEBASE_LABELS)*(btn_w+gap) + 40, y_btn, stop_w, btn_h)
 
+    # botón para cambiar forma de onda (cicla entre sine/triangle/square)
+    # y reubicar los botones para que queden junto al RUN (stop_rect)
+    wave_w = 140
+    amp_w = 140
+    gap2 = 12
+
+    # fila superior: wave y amp a la derecha del botón RUN (stop_rect)
+    wave_rect = pygame.Rect(stop_rect.right + gap2, y_btn, wave_w, btn_h)
+    amp_rect = pygame.Rect(wave_rect.right + gap2, y_btn, amp_w, btn_h)
+
+    # fila inferior: APPLY AMP debajo de wave, INJECT debajo de amp
+    y_btn2 = y_btn + btn_h + 8
+    apply_w = wave_w
+    inject_w = 100
+    apply_rect = pygame.Rect(wave_rect.left, y_btn2, apply_w, btn_h)
+    inject_rect = pygame.Rect(amp_rect.right - inject_w, y_btn2, inject_w, btn_h)
+
+    # flags runtime
+    force_sim = False
+    apply_amp_to_serial = False
+
     last_time = time.time()
     sample_acc = 0.0
     base_sample_rate = 1000.0  # muestras por segundo de referencia para simulación/visualización
@@ -166,9 +209,18 @@ def main():
                 # stop button toggle: sólo cambia el estado de stopped
                 if stop_rect.collidepoint(mx,my):
                     stopped = not stopped
-                    # no borrar buffer; detener la adquisición en el momento exacto
-                    # paused se mantiene independiente (tecla SPACE)
-                    # cuando stopped==True la adquisición se congela; al volver a False se reanuda
+                # waveform cycle button
+                if wave_rect.collidepoint(mx,my):
+                    waveform_idx = (waveform_idx + 1) % len(WAVEFORMS)
+                # amplitude cycle button
+                if amp_rect.collidepoint(mx,my):
+                    amplitude_idx = (amplitude_idx + 1) % len(AMPLITUDE_OPTIONS)
+                # apply amplitude to serial toggle
+                if apply_rect.collidepoint(mx,my):
+                    apply_amp_to_serial = not apply_amp_to_serial
+                # force simulation even if serial present
+                if inject_rect.collidepoint(mx,my):
+                    force_sim = not force_sim
 
         # calcular sample rate actual (ajustado por timebase)
         multiplier = TIMEBASE_OPTIONS[timebase_idx]
@@ -176,15 +228,24 @@ def main():
 
         # Solo adquirir nuevos datos si no está paused y no está stopped
         if not paused and not stopped:
-            # si hay serial: leer todos los bytes disponibles y agregarlos
-            if ser:
+            # si hay serial y NO se forzó simulación: leer todos los bytes disponibles y agregarlos
+            if ser and not force_sim:
                 try:
                     n = ser.in_waiting if hasattr(ser, 'in_waiting') else 0
                     if n:
                         data = ser.read(n)
                         for b in data:
-                            buffer.append(b)
-                            current_adresh = b
+                            # si se eligió aplicar amplitud a serial, escalamos alrededor de 128
+                            if apply_amp_to_serial:
+                                # normalizar a [-1,1], aplicar factor, recortar y mapear a 0..255
+                                v = (b - 128) / 128.0
+                                v *= AMPLITUDE_OPTIONS[amplitude_idx]
+                                v = max(-1.0, min(1.0, v))
+                                ad = int(round((v + 1.0) / 2.0 * 255)) & 0xFF
+                            else:
+                                ad = b
+                            buffer.append(ad)
+                            current_adresh = ad
                             num2, num1, num0 = bin8_to_dec3(current_adresh)
                     else:
                         # si no llegan bytes, mantener última muestra; para evitar quedarse sin movimiento
@@ -198,12 +259,15 @@ def main():
                     ser = None
                     print("Error serial, entrando en modo simulador:", e)
             else:
-                # simulación: generar muestras según sample_rate
+                # simulación: generar muestras según sample_rate (o forzada por INJECT)
                 sample_acc += dt * sample_rate
                 while sample_acc >= 1.0:
-                    s = generate_sim_sample(_sim_t, freq=SIM_FREQ*multiplier, amp=1.0)
+                    # usar amplitud/forma seleccionada por el usuario
+                    s = generate_sim_sample(_sim_t, freq=SIM_FREQ*multiplier, amp=AMPLITUDE_OPTIONS[amplitude_idx], waveform=WAVEFORMS[waveform_idx])
+                    # recortar a [-1,1] antes de mapear para evitar wrap al convertir a byte
+                    s = max(-1.0, min(1.0, s))
                     _sim_t += 1.0 / sample_rate
-                    ad = int(round((s + 1.0) / 2.0 * 255)) & 0xFF
+                    ad = int(round((s + 1.0) / 2.0 * 255))
                     buffer.append(ad)
                     current_adresh = ad
                     num2, num1, num0 = bin8_to_dec3(current_adresh)
@@ -280,12 +344,26 @@ def main():
         tb_label = f"Timebase: {TIMEBASE_LABELS[timebase_idx]}  (mul x{TIMEBASE_OPTIONS[timebase_idx]})"
         screen.blit(font.render(tb_label, True, (220,220,180)), (PLOT_RECT.left, PLOT_RECT.bottom + 6))
 
+        # Mostrar forma de onda actual y dibujar botón
+        wave_label = WAVEFORMS[waveform_idx].upper()
+        draw_button(screen, wave_rect, wave_label, active=False)
+
+        amp_label = f"AMP {AMPLITUDE_OPTIONS[amplitude_idx]:.1f}x"
+        draw_button(screen, amp_rect, amp_label, active=False)
+
+        apply_label = "APPLY AMP" if not apply_amp_to_serial else "APPLY AMP (*)"
+        draw_button(screen, apply_rect, apply_label, active=apply_amp_to_serial)
+
+        inject_label = "INJECT" if not force_sim else "INJECT (*)"
+        draw_button(screen, inject_rect, inject_label, active=force_sim)
+
         # Recuadros para Vmax, Vpp y Frecuencia (apilados, derecha)
-        info2_x = PLOT_RECT.right - 300
-        info2_y = PLOT_RECT.bottom + 8
         metric_w = 160
         metric_h = 28
         spacing = 6
+        # colocar a la derecha del plot, pero al menos a 12px a la derecha de los botones (amp_rect)
+        info2_x = max(PLOT_RECT.right - metric_w - 12, amp_rect.right + 12)
+        info2_y = PLOT_RECT.bottom + 8
 
         metrics = [
             (f"Vmax: {v_max:.3f} V", txt_color),

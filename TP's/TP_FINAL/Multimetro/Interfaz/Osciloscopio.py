@@ -1,7 +1,6 @@
 import pygame
 import sys
 import math
-import time
 from collections import deque
 
 # intentar importar pyserial; si no está, cae a modo simulador
@@ -24,19 +23,23 @@ FPS = 60
 PLOT_MARGIN_X = 40
 PLOT_TOP_MARGIN = 40
 BOTTOM_RESERVED = 220  # espacio bajo la grafica para controles
-BTN_W, BTN_H = 70, 36
-BTN_GAP = 12
+BTN_H = 36
 BTN_START_X = 40
 STOP_BTN_WIDTH = 90
 STOP_BTN_EXTRA_GAP = 40
 WINDOW_MIN_WIDTH = 600
 WINDOW_MIN_HEIGHT = 420
 
-# Timebase multipliers mostrados por botones
-TIMEBASE_OPTIONS = [1, 2, 5, 10]   # multiplicadores de velocidad
-TIMEBASE_LABELS = ["1x", "2x", "5x", "10x"]
-timebase_idx = 0
+SLIDER_HEIGHT = 12
+SLIDER_MIN_WIDTH = 220
+SLIDER_MAX_WIDTH = 520
 
+TIME_WINDOW_MIN = 0.001  # 1 ms
+TIME_WINDOW_MAX = 60.0   # 60 s
+DEFAULT_TIME_WINDOW = 0.1
+
+BASE_SAMPLE_RATE = 1000.0  # muestras por segundo de referencia
+RAW_BUFFER_PAD = 1000
 # Simulación si no hay serial
 SIM_FREQ = 5.0
 SIM_AMP = 1.0
@@ -120,37 +123,87 @@ def compute_layout(width, height):
     usable_height = max(200, height - (PLOT_TOP_MARGIN + BOTTOM_RESERVED))
     plot_rect = pygame.Rect(PLOT_MARGIN_X, PLOT_TOP_MARGIN, usable_width, usable_height)
 
-    y_btn = plot_rect.bottom + 20
-    btns = []
-    for i, lbl in enumerate(TIMEBASE_LABELS):
-        x = BTN_START_X + i * (BTN_W + BTN_GAP)
-        rect = pygame.Rect(x, y_btn, BTN_W, BTN_H)
-        btns.append((rect, lbl))
+    slider_width = max(SLIDER_MIN_WIDTH, min(SLIDER_MAX_WIDTH, plot_rect.width - 120))
+    slider_x = BTN_START_X
+    slider_y = plot_rect.bottom + 20
+    slider_rect = pygame.Rect(slider_x, slider_y, slider_width, SLIDER_HEIGHT)
 
-    stop_x = BTN_START_X + len(TIMEBASE_LABELS) * (BTN_W + BTN_GAP) + STOP_BTN_EXTRA_GAP
-    stop_rect = pygame.Rect(stop_x, y_btn, STOP_BTN_WIDTH, BTN_H)
+    stop_x = slider_rect.right + STOP_BTN_EXTRA_GAP
+    stop_y = slider_rect.centery - BTN_H // 2
+    stop_rect = pygame.Rect(stop_x, stop_y, STOP_BTN_WIDTH, BTN_H)
 
     return {
         "plot_rect": plot_rect,
-        "btns": btns,
+        "slider_rect": slider_rect,
         "stop_rect": stop_rect,
-        "start_x": BTN_START_X,
-        "btn_h": BTN_H,
-        "y_btn": y_btn,
         "info_x": BTN_START_X,
-        "info_y": y_btn + BTN_H + 8
+        "info_y": stop_rect.bottom + 12
     }
 
-def adjust_buffer(buffer, new_len, fill_value=128):
-    new_len = max(10, int(new_len))
-    new_buffer = deque(buffer, maxlen=new_len)
-    if len(new_buffer) < new_len:
-        pad_val = new_buffer[-1] if new_buffer else fill_value
-        new_buffer.extend([pad_val] * (new_len - len(new_buffer)))
-    return new_buffer
+def slider_value_to_time(value):
+    value = max(0.0, min(1.0, value))
+    log_min = math.log10(TIME_WINDOW_MIN)
+    log_max = math.log10(TIME_WINDOW_MAX)
+    return 10 ** (log_min + value * (log_max - log_min))
+
+def time_to_slider_value(seconds):
+    seconds = max(TIME_WINDOW_MIN, min(TIME_WINDOW_MAX, seconds))
+    log_min = math.log10(TIME_WINDOW_MIN)
+    log_max = math.log10(TIME_WINDOW_MAX)
+    return (math.log10(seconds) - log_min) / (log_max - log_min)
+
+def format_time_window(seconds):
+    if seconds < 0.01:
+        return f"{seconds*1000:.2f} ms"
+    if seconds < 1.0:
+        return f"{seconds*1000:.1f} ms"
+    if seconds < 10:
+        return f"{seconds:.2f} s"
+    return f"{seconds:.1f} s"
+
+def extract_window(values, sample_rate, window_seconds):
+    if not values:
+        return []
+    needed = max(2, int(sample_rate * window_seconds))
+    needed = min(needed, len(values))
+    if needed <= 0:
+        return []
+    return values[-needed:]
+
+def slider_value_from_pos(rect, x):
+    if rect.width <= 0:
+        return 0.0
+    return max(0.0, min(1.0, (x - rect.left) / rect.width))
+
+def resample_values(values, target_len):
+    if not values or target_len <= 0:
+        return []
+    if len(values) == target_len:
+        return list(values)
+    res = []
+    step = len(values) / target_len
+    for i in range(target_len):
+        idx = int(i * step)
+        if idx >= len(values):
+            idx = len(values) - 1
+        res.append(values[idx])
+    return res
+
+def draw_slider(surface, rect, value):
+    track_rect = rect.copy()
+    track_rect.inflate_ip(0, 6)
+    pygame.draw.rect(surface, (35,35,45), track_rect, border_radius=6)
+    inner = rect.inflate(0, 2)
+    pygame.draw.rect(surface, (90,90,110), inner, border_radius=6)
+    pygame.draw.rect(surface, (0,0,0), track_rect, 2, border_radius=6)
+    handle_x = rect.left + value * rect.width
+    handle = pygame.Rect(0, 0, 16, 26)
+    handle.center = (handle_x, track_rect.centery)
+    pygame.draw.rect(surface, (200,200,80), handle, border_radius=6)
+    pygame.draw.rect(surface, (0,0,0), handle, 2, border_radius=6)
 
 def main():
-    global _sim_t, timebase_idx
+    global _sim_t
     pygame.init()
     screen_w, screen_h = WIDTH, HEIGHT
     screen = pygame.display.set_mode((screen_w, screen_h), pygame.RESIZABLE)
@@ -158,8 +211,13 @@ def main():
     clock = pygame.time.Clock()
 
     layout = compute_layout(screen_w, screen_h)
-    initial_width = layout["plot_rect"].width
-    buffer = deque([128]*initial_width, maxlen=initial_width)
+
+    max_samples = int(BASE_SAMPLE_RATE * TIME_WINDOW_MAX) + RAW_BUFFER_PAD
+    initial_fill = min(max_samples, 1000)
+    sample_buffer = deque([128]*initial_fill, maxlen=max_samples)
+
+    slider_value = time_to_slider_value(DEFAULT_TIME_WINDOW)
+    slider_dragging = False
     running = True
     paused = False
 
@@ -179,15 +237,13 @@ def main():
     # --- botón STOP/REANUDAR (no borra la señal, solo congela la adquisición) ---
     stopped = False
 
-    last_time = time.time()
     sample_acc = 0.0
-    base_sample_rate = 1000.0  # muestras por segundo de referencia para simulación/visualización
 
     while running:
         dt = clock.tick(FPS) / 1000.0
         layout_dirty = False
-        btns_for_events = layout["btns"]
         stop_rect_for_events = layout["stop_rect"]
+        slider_rect_for_events = layout["slider_rect"]
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 running = False
@@ -201,30 +257,27 @@ def main():
                     paused = not paused
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 mx,my = ev.pos
-                # timebase buttons
-                for i,(r,lbl) in enumerate(btns_for_events):
-                    if r.collidepoint(mx,my):
-                        timebase_idx = i
-                # stop button toggle: sólo cambia el estado de stopped
-                if stop_rect_for_events.collidepoint(mx,my):
+                if slider_rect_for_events.inflate(0, 10).collidepoint(mx,my):
+                    slider_dragging = True
+                    slider_value = slider_value_from_pos(layout["slider_rect"], mx)
+                elif stop_rect_for_events.collidepoint(mx,my):
                     stopped = not stopped
-                    # no borrar buffer; detener la adquisición en el momento exacto
-                    # paused se mantiene independiente (tecla SPACE)
-                    # cuando stopped==True la adquisición se congela; al volver a False se reanuda
+            elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+                slider_dragging = False
+            elif ev.type == pygame.MOUSEMOTION and slider_dragging:
+                slider_value = slider_value_from_pos(layout["slider_rect"], ev.pos[0])
 
         if layout_dirty:
             layout = compute_layout(screen_w, screen_h)
-            buffer = adjust_buffer(buffer, layout["plot_rect"].width, current_adresh)
-
         plot_rect = layout["plot_rect"]
-        btns = layout["btns"]
+        slider_rect = layout["slider_rect"]
         stop_rect = layout["stop_rect"]
         info_x = layout["info_x"]
         info_y = layout["info_y"]
 
-        # calcular sample rate actual (ajustado por timebase)
-        multiplier = TIMEBASE_OPTIONS[timebase_idx]
-        sample_rate = base_sample_rate * multiplier
+        # sample rate de referencia
+        sample_rate = BASE_SAMPLE_RATE
+        time_window = slider_value_to_time(slider_value)
 
         # Solo adquirir nuevos datos si no está paused y no está stopped
         if not paused and not stopped:
@@ -235,7 +288,7 @@ def main():
                     if n:
                         data = ser.read(n)
                         for b in data:
-                            buffer.append(b)
+                            sample_buffer.append(b)
                             current_adresh = b
                             num2, num1, num0 = bin8_to_dec3(current_adresh)
                     else:
@@ -243,7 +296,7 @@ def main():
                         # añadir una copia ocasional según sample_rate para desplazar horizonte
                         sample_acc += dt * sample_rate
                         while sample_acc >= 1.0:
-                            buffer.append(current_adresh)
+                            sample_buffer.append(current_adresh)
                             sample_acc -= 1.0
                 except Exception as e:
                     # si falla el serial, pasar a modo simulador
@@ -253,10 +306,10 @@ def main():
                 # simulación: generar muestras según sample_rate
                 sample_acc += dt * sample_rate
                 while sample_acc >= 1.0:
-                    s = generate_sim_sample(_sim_t, freq=SIM_FREQ*multiplier, amp=1.0)
+                    s = generate_sim_sample(_sim_t, freq=SIM_FREQ, amp=1.0)
                     _sim_t += 1.0 / sample_rate
                     ad = int(round((s + 1.0) / 2.0 * 255)) & 0xFF
-                    buffer.append(ad)
+                    sample_buffer.append(ad)
                     current_adresh = ad
                     num2, num1, num0 = bin8_to_dec3(current_adresh)
                     sample_acc -= 1.0
@@ -264,13 +317,17 @@ def main():
         # DIBUJO
         screen.fill((15,15,25))
         draw_scope_grid(screen, plot_rect, cols=10, rows=8, minor_steps=5)
-        draw_trace(screen, plot_rect, list(buffer), color=(0,200,0))
+
+        raw_values = list(sample_buffer)
+        window_samples = extract_window(raw_values, sample_rate, time_window)
+        plot_samples = resample_values(window_samples, plot_rect.width)
+        draw_trace(screen, plot_rect, plot_samples, color=(0,200,0))
 
         # indicadores y texto
         font = pygame.font.SysFont('Consolas', 18)
 
         # --- CÁLCULO DE Vmax, Vmin, Vpp y FRECUENCIA ESTIMADA ---
-        vals = list(buffer)
+        vals = window_samples
         if vals:
             # convertir ADC(0..255) a voltaje
             v_vals = [ (b / 255.0) * VREF for b in vals ]
@@ -327,9 +384,6 @@ def main():
             ty = r.top + (r.height - txt.get_height())//2
             screen.blit(txt, (tx, ty))
 
-        tb_label = f"Timebase: {TIMEBASE_LABELS[timebase_idx]}  (mul x{TIMEBASE_OPTIONS[timebase_idx]})"
-        screen.blit(font.render(tb_label, True, (220,220,180)), (plot_rect.left, plot_rect.bottom + 6))
-
         # Recuadros para Vmax, Vpp y Frecuencia (apilados, derecha)
         info2_x = plot_rect.right - 300
         info2_y = plot_rect.bottom + 8
@@ -351,9 +405,10 @@ def main():
             pygame.draw.rect(screen, (70,70,90), r, 2, border_radius=6)
             screen.blit(font.render(label, True, color), (r.left + 8, r.top + 4))
 
-        # dibujar botones de timebase
-        for i,(r,lbl) in enumerate(btns):
-            draw_button(screen, r, lbl, active=(i==timebase_idx))
+        # Slider de ventana temporal
+        slider_label = f"Ventana visible: {format_time_window(time_window)}"
+        screen.blit(font.render(slider_label, True, (220,220,180)), (slider_rect.left, slider_rect.top - 22))
+        draw_slider(screen, slider_rect, slider_value)
 
         # dibujar botón STOP/REANUDAR (label indica acción disponible)
         stop_label = "RUN" if not stopped else "STOP"
@@ -367,7 +422,7 @@ def main():
 
         # leyenda de ayuda
         small = pygame.font.SysFont('Consolas', 14)
-        screen.blit(small.render("Click botones para cambiar velocidad. Espacio pausa. Ajustar SERIAL_PORT si se usa hardware.", True, (180,180,180)), (40, screen_h-30))
+        screen.blit(small.render("Arrastra el slider para ajustar ventana (1 ms a 60 s). Espacio pausa. Ajustar SERIAL_PORT si se usa hardware.", True, (180,180,180)), (40, screen_h-30))
 
         pygame.display.flip()
 

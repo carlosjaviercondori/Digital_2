@@ -30,7 +30,7 @@ Ejemplo de lectura 📈
 - Conversión interna → NUM2 = 2, NUM1 = 5, NUM0 = 4  
 - Visual: 2 . 5 4 (RD7 encendido en primer dígito) 🔢
 
-![imagine alt](https://github.com/carlosjaviercondori/Digital_2/blob/main/TP's/TP_FINAL/Multimetro/Imagenes/version%201.3.png)
+![imagine alt]("https://github.com/user-attachments/assets/854c3ebe-9c36-40da-9c79-3c837e6b2496")
 
 Variables importantes (direcciones) 📎  
 - INDEX (0x20) — índice de dígito activo (0..2)  

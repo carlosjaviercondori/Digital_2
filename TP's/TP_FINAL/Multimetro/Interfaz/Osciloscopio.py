@@ -13,21 +13,28 @@ except Exception:
     HAS_SERIAL = False
 
 # Configuración serial (ajustar puerto)
-SERIAL_PORT = "COM4"
+SERIAL_PORT = "COM3"
 BAUDRATE = 19200
 SER_TIMEOUT = 0.01
 
 # Configuración gráfica
 WIDTH, HEIGHT = 1000, 600
-PLOT_RECT = pygame.Rect(40, 40, 920, 320)
 FPS = 60
-BUFFER_LEN = PLOT_RECT.width
+
+PLOT_MARGIN_X = 40
+PLOT_TOP_MARGIN = 40
+BOTTOM_RESERVED = 220  # espacio bajo la grafica para controles
+BTN_W, BTN_H = 70, 36
+BTN_GAP = 12
+BTN_START_X = 40
+STOP_BTN_WIDTH = 90
+STOP_BTN_EXTRA_GAP = 40
+WINDOW_MIN_WIDTH = 600
+WINDOW_MIN_HEIGHT = 420
 
 # Timebase multipliers mostrados por botones
 TIMEBASE_OPTIONS = [1, 2, 5, 10]   # multiplicadores de velocidad
-# Timebase: define la ventana temporal mostrada
-TIMEBASE_LABELS = ["10 s", "5 s", "1 s", "10 ms"]
-TIMEBASE_WINDOWS = [10.0, 5.0, 1.0, 0.01]
+TIMEBASE_LABELS = ["1x", "2x", "5x", "10x"]
 timebase_idx = 0
 
 # Simulación si no hay serial
@@ -108,14 +115,51 @@ def draw_button(surface, rect, label, active=False):
 def generate_sim_sample(t, freq=SIM_FREQ, amp=SIM_AMP):
     return amp * math.sin(2 * math.pi * freq * t)
 
+def compute_layout(width, height):
+    usable_width = max(200, width - 2 * PLOT_MARGIN_X)
+    usable_height = max(200, height - (PLOT_TOP_MARGIN + BOTTOM_RESERVED))
+    plot_rect = pygame.Rect(PLOT_MARGIN_X, PLOT_TOP_MARGIN, usable_width, usable_height)
+
+    y_btn = plot_rect.bottom + 20
+    btns = []
+    for i, lbl in enumerate(TIMEBASE_LABELS):
+        x = BTN_START_X + i * (BTN_W + BTN_GAP)
+        rect = pygame.Rect(x, y_btn, BTN_W, BTN_H)
+        btns.append((rect, lbl))
+
+    stop_x = BTN_START_X + len(TIMEBASE_LABELS) * (BTN_W + BTN_GAP) + STOP_BTN_EXTRA_GAP
+    stop_rect = pygame.Rect(stop_x, y_btn, STOP_BTN_WIDTH, BTN_H)
+
+    return {
+        "plot_rect": plot_rect,
+        "btns": btns,
+        "stop_rect": stop_rect,
+        "start_x": BTN_START_X,
+        "btn_h": BTN_H,
+        "y_btn": y_btn,
+        "info_x": BTN_START_X,
+        "info_y": y_btn + BTN_H + 8
+    }
+
+def adjust_buffer(buffer, new_len, fill_value=128):
+    new_len = max(10, int(new_len))
+    new_buffer = deque(buffer, maxlen=new_len)
+    if len(new_buffer) < new_len:
+        pad_val = new_buffer[-1] if new_buffer else fill_value
+        new_buffer.extend([pad_val] * (new_len - len(new_buffer)))
+    return new_buffer
+
 def main():
     global _sim_t, timebase_idx
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen_w, screen_h = WIDTH, HEIGHT
+    screen = pygame.display.set_mode((screen_w, screen_h), pygame.RESIZABLE)
     pygame.display.set_caption("Osciloscopio - Lectura ADRESH por Serial")
     clock = pygame.time.Clock()
 
-    buffer = deque([128]*BUFFER_LEN, maxlen=BUFFER_LEN)
+    layout = compute_layout(screen_w, screen_h)
+    initial_width = layout["plot_rect"].width
+    buffer = deque([128]*initial_width, maxlen=initial_width)
     running = True
     paused = False
 
@@ -132,20 +176,8 @@ def main():
     current_adresh = 128
     num2, num1, num0 = bin8_to_dec3(current_adresh)
 
-    # botones de timebase
-    btns = []
-    btn_w, btn_h = 70, 36
-    gap = 12
-    start_x = 40
-    y_btn = PLOT_RECT.bottom + 20
-    for i, lbl in enumerate(TIMEBASE_LABELS):
-        r = pygame.Rect(start_x + i*(btn_w+gap), y_btn, btn_w, btn_h)
-        btns.append((r, lbl))
-
     # --- botón STOP/REANUDAR (no borra la señal, solo congela la adquisición) ---
     stopped = False
-    stop_w = 90
-    stop_rect = pygame.Rect(start_x + len(TIMEBASE_LABELS)*(btn_w+gap) + 40, y_btn, stop_w, btn_h)
 
     last_time = time.time()
     sample_acc = 0.0
@@ -153,28 +185,46 @@ def main():
 
     while running:
         dt = clock.tick(FPS) / 1000.0
+        layout_dirty = False
+        btns_for_events = layout["btns"]
+        stop_rect_for_events = layout["stop_rect"]
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 running = False
+            elif ev.type == pygame.VIDEORESIZE:
+                screen_w = max(WINDOW_MIN_WIDTH, ev.w)
+                screen_h = max(WINDOW_MIN_HEIGHT, ev.h)
+                screen = pygame.display.set_mode((screen_w, screen_h), pygame.RESIZABLE)
+                layout_dirty = True
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_SPACE:
                     paused = not paused
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 mx,my = ev.pos
                 # timebase buttons
-                for i,(r,lbl) in enumerate(btns):
+                for i,(r,lbl) in enumerate(btns_for_events):
                     if r.collidepoint(mx,my):
                         timebase_idx = i
                 # stop button toggle: sólo cambia el estado de stopped
-                if stop_rect.collidepoint(mx,my):
+                if stop_rect_for_events.collidepoint(mx,my):
                     stopped = not stopped
                     # no borrar buffer; detener la adquisición en el momento exacto
                     # paused se mantiene independiente (tecla SPACE)
                     # cuando stopped==True la adquisición se congela; al volver a False se reanuda
 
+        if layout_dirty:
+            layout = compute_layout(screen_w, screen_h)
+            buffer = adjust_buffer(buffer, layout["plot_rect"].width, current_adresh)
+
+        plot_rect = layout["plot_rect"]
+        btns = layout["btns"]
+        stop_rect = layout["stop_rect"]
+        info_x = layout["info_x"]
+        info_y = layout["info_y"]
+
         # calcular sample rate actual (ajustado por timebase)
-        time_window = TIMEBASE_WINDOWS[timebase_idx]
-        sample_rate = BUFFER_LEN / time_window if time_window > 0 else BUFFER_LEN
+        multiplier = TIMEBASE_OPTIONS[timebase_idx]
+        sample_rate = base_sample_rate * multiplier
 
         # Solo adquirir nuevos datos si no está paused y no está stopped
         if not paused and not stopped:
@@ -203,7 +253,7 @@ def main():
                 # simulación: generar muestras según sample_rate
                 sample_acc += dt * sample_rate
                 while sample_acc >= 1.0:
-                    s = generate_sim_sample(_sim_t, freq=SIM_FREQ, amp=1.0)
+                    s = generate_sim_sample(_sim_t, freq=SIM_FREQ*multiplier, amp=1.0)
                     _sim_t += 1.0 / sample_rate
                     ad = int(round((s + 1.0) / 2.0 * 255)) & 0xFF
                     buffer.append(ad)
@@ -213,8 +263,8 @@ def main():
 
         # DIBUJO
         screen.fill((15,15,25))
-        draw_scope_grid(screen, PLOT_RECT, cols=10, rows=8, minor_steps=5)
-        draw_trace(screen, PLOT_RECT, list(buffer), color=(0,200,0))
+        draw_scope_grid(screen, plot_rect, cols=10, rows=8, minor_steps=5)
+        draw_trace(screen, plot_rect, list(buffer), color=(0,200,0))
 
         # indicadores y texto
         font = pygame.font.SysFont('Consolas', 18)
@@ -242,15 +292,11 @@ def main():
             else:
                 freq_est = 0.0
         else:
-            v_max = v_min = v_pp = 0.0
-            v_avg = 0.0
+            v_max = v_min = v_pp = v_avg = 0.0
             freq_est = 0.0
         # --- FIN CÁLCULOS ---
 
         # Mover ADRESH y NUMs debajo de los botones para que sean visibles
-        info_x = start_x
-        info_y = y_btn + btn_h + 8
-
         # Recuadro izquierdo para ADRESH y NUMs
         left_box_w = 360
         left_box_h = 32
@@ -281,21 +327,21 @@ def main():
             ty = r.top + (r.height - txt.get_height())//2
             screen.blit(txt, (tx, ty))
 
-        tb_label = f"Ventana: {TIMEBASE_LABELS[timebase_idx]}"
-        screen.blit(font.render(tb_label, True, (220,220,180)), (PLOT_RECT.left, PLOT_RECT.bottom + 6))
+        tb_label = f"Timebase: {TIMEBASE_LABELS[timebase_idx]}  (mul x{TIMEBASE_OPTIONS[timebase_idx]})"
+        screen.blit(font.render(tb_label, True, (220,220,180)), (plot_rect.left, plot_rect.bottom + 6))
 
         # Recuadros para Vmax, Vpp y Frecuencia (apilados, derecha)
-        info2_x = PLOT_RECT.right - 300
-        info2_y = PLOT_RECT.bottom + 8
+        info2_x = plot_rect.right - 300
+        info2_y = plot_rect.bottom + 8
         metric_w = 160
         metric_h = 28
         spacing = 6
 
         metrics = [
             (f"Vmax: {v_max:.3f} V", txt_color),
-            (f"Vpp:  {v_pp:.3f} V", txt_color),
-            (f"Vavg: {v_avg:.3f} V", txt_color),
             (f"Vmin: {v_min:.3f} V", txt_color),
+            (f"Vmed: {v_avg:.3f} V", txt_color),
+            (f"Vpp:  {v_pp:.3f} V", txt_color),
             (f"Frec: {freq_est:.2f} Hz", txt_color)
         ]
 
@@ -321,7 +367,7 @@ def main():
 
         # leyenda de ayuda
         small = pygame.font.SysFont('Consolas', 14)
-        screen.blit(small.render("Click botones para cambiar velocidad. Espacio pausa. Ajustar SERIAL_PORT si se usa hardware.", True, (180,180,180)), (40, HEIGHT-30))
+        screen.blit(small.render("Click botones para cambiar velocidad. Espacio pausa. Ajustar SERIAL_PORT si se usa hardware.", True, (180,180,180)), (40, screen_h-30))
 
         pygame.display.flip()
 

@@ -155,11 +155,11 @@ INICIO:
 
 ;========================= Bucle principal ============================
 MAIN_LOOP:
-    ; Promediar 8 conversiones para suavizar la lectura
+    ; Promediar 16 conversiones para suavizar la lectura
     BANKSEL SUM_L
     CLRF    SUM_L
     CLRF    SUM_H
-    MOVLW   .8
+    MOVLW   .16
     MOVWF   TMP
 
 SAMPLE_ADC:
@@ -181,7 +181,10 @@ WAIT_ADC:
     DECFSZ  TMP, F
     GOTO    SAMPLE_ADC
 
-    ; promedio = suma / 8
+    ; promedio = suma / 16
+    BCF     STATUS, C
+    RRF     SUM_H, F
+    RRF     SUM_L, F
     BCF     STATUS, C
     RRF     SUM_H, F
     RRF     SUM_L, F

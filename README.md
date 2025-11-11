@@ -46,7 +46,7 @@ Montaje rápido 🛠️
 4. Alimentar PIC a +5V y GND; añadir condensador 0.1 µF entre Vdd y Vss cerca del PIC.  
 5. Programar el PIC con multimetro_1.0.asm (usar MPASM / MPLAB X y programador compatible). 💾
 
-![Image](https://github.com/carlosjaviercondori/Digital_2/blob/main/TP's/TP_FINAL/Multimetro/Imagenes/version%201.4.png)
+![Image](https://github.com/carlosjaviercondori/Digital_2/blob/main/TP's/TP_FINAL/Multimetro/Imagenes/Topologico.jpeg)
 
 Compilación y programación 📦  
 - Usar MPLAB X / MPASM para ensamblar.  
